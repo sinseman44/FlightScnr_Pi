@@ -338,7 +338,7 @@ extract_logos() {
 setup_venv() {
     log_step "Python virtual environment"
     if [ ! -d "$VENV_DIR" ]; then
-        python3 -m venv --system-site-packages "$VENV_DIR"
+        python3 -m venv "$VENV_DIR"
         log_ok "Created $VENV_DIR"
     else
         log_ok "Using existing $VENV_DIR"
