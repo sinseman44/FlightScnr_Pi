@@ -391,15 +391,26 @@ def save_secrets_from_portal(payload: dict) -> dict[str, str]:
 
 
 def request_service_restart() -> bool:
-    """Restart flightscnr so the display picks up new keys."""
+    """Restart the FlightScnr unit after portal configuration changes."""
+    command = ["/usr/bin/systemctl", "restart", "flightscnr.service"]
+    if os.geteuid() != 0:
+        command = ["/usr/bin/sudo", "-n", *command]
     try:
-        subprocess.run(
-            ["systemctl", "restart", "flightscnr"],
+        result = subprocess.run(
+            command,
             check=False,
             timeout=15,
             capture_output=True,
+            text=True,
         )
-        return True
+        if result.returncode == 0:
+            return True
+        logger.warning(
+            "Could not restart flightscnr.service (exit %d): %s",
+            result.returncode,
+            (result.stderr or result.stdout or "no output").strip(),
+        )
+        return False
     except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("Could not restart flightscnr service: %s", exc)
+        logger.warning("Could not restart flightscnr.service: %s", exc)
         return False

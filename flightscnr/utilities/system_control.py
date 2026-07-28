@@ -44,6 +44,6 @@ def request_shutdown() -> dict:
 def request_app_restart() -> dict:
     return _start_power_action(
         "restart",
-        "systemctl restart flightscnr",
+        "/usr/bin/systemctl restart flightscnr.service",
         message="FlightScnr is restarting. The display and portal will reconnect shortly.",
     )

@@ -1,0 +1,3 @@
+# FlightScnr runs as an unprivileged kiosk user. Permit only an application
+# restart; reboot and poweroff intentionally remain unauthorized.
+__REPO_OWNER__ ALL=(root) NOPASSWD: __SYSTEMCTL__ restart flightscnr.service

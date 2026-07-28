@@ -1,0 +1,43 @@
+[Unit]
+Description=FlightScnr Pi — Cage/Wayland kiosk
+Documentation=https://github.com/yashmulgaonkar/FlightScnr_Pi
+After=network-online.target systemd-user-sessions.service systemd-logind.service dbus.socket
+Wants=network-online.target systemd-logind.service dbus.socket
+ConditionPathExists=/dev/tty0
+Conflicts=getty@tty7.service
+After=getty@tty7.service
+
+[Service]
+Type=simple
+User=__REPO_OWNER__
+Group=__REPO_GROUP__
+PAMName=cage
+
+EnvironmentFile=/etc/flightscnr.env
+Environment=FLIGHTSCNR_DATA_DIR=/var/lib/flightscnr
+Environment=SDL_VIDEODRIVER=wayland
+Environment=LIBSEAT_BACKEND=logind
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XKB_DEFAULT_LAYOUT=fr
+WorkingDirectory=__REPO_DIR__/flightscnr
+
+UtmpIdentifier=tty7
+UtmpMode=user
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/cage -s -- __REPO_DIR__/flightscnr-venv/bin/python3 __REPO_DIR__/flightscnr/flightscnr.py
+ExecStartPost=+/usr/bin/chvt 7
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
