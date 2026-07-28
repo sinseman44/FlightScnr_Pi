@@ -1,5 +1,5 @@
 [Unit]
-Description=FlightScnr Pi — Cage/Wayland kiosk
+Description=FlightScnr Pi — Cage/XWayland kiosk
 Documentation=https://github.com/yashmulgaonkar/FlightScnr_Pi
 After=network-online.target systemd-user-sessions.service systemd-logind.service dbus.socket
 Wants=network-online.target systemd-logind.service dbus.socket
@@ -15,7 +15,6 @@ PAMName=cage
 
 EnvironmentFile=/etc/flightscnr.env
 Environment=FLIGHTSCNR_DATA_DIR=/var/lib/flightscnr
-Environment=SDL_VIDEODRIVER=wayland
 Environment=LIBSEAT_BACKEND=logind
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XKB_DEFAULT_LAYOUT=fr

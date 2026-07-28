@@ -64,8 +64,8 @@ set_env() {
 set_env DISPLAY_WIDTH 480
 set_env DISPLAY_HEIGHT 320
 set_env DISPLAY_ROTATION 0
-set_env DISPLAY_FULLSCREEN True
-set_env SDL_VIDEODRIVER wayland
+set_env DISPLAY_FULLSCREEN False
+set_env SDL_VIDEODRIVER x11
 set_env TOUCH_USE_FINGER_EVENTS False
 set_env WEB_PORT 8080
 chmod 0600 "$ENV_FILE"
