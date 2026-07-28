@@ -75,27 +75,51 @@ OFF_HOURS_TOUCH_WAKE_S = 300
 class RoundTouchDisplay:
     def __init__(self):
         try:
-            from config import DISPLAY_FULLSCREEN
+            from config import (
+                DISPLAY_FULLSCREEN,
+                DISPLAY_HEIGHT,
+                DISPLAY_WIDTH,
+            )
             fullscreen = DISPLAY_FULLSCREEN
+            requested_width = DISPLAY_WIDTH
+            requested_height = DISPLAY_HEIGHT
         except ImportError:
-            fullscreen = os.environ.get("DISPLAY_FULLSCREEN", "true").lower() in ("1", "true", "yes")
+            fullscreen = os.environ.get("DISPLAY_FULLSCREEN", "true").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            requested_width = int(os.environ.get("DISPLAY_WIDTH", str(theme.SIZE)))
+            requested_height = int(os.environ.get("DISPLAY_HEIGHT", str(theme.SIZE)))
 
-        requested = theme.SIZE
-        self._display = video.init_display(requested, requested, fullscreen)
-        fit_side = min(self._display.get_size())
+        # Open SDL at the native physical resolution. The UI itself remains a
+        # square logical surface and is centered by rotation.present().
+        self._display = video.init_display(
+            requested_width,
+            requested_height,
+            fullscreen,
+        )
+        display_width, display_height = self._display.get_size()
+        fit_side = min(display_width, display_height)
         if fit_side != theme.SIZE:
             logger.info(
-                "Framebuffer adjusted %d×%d → %d×%d to match display",
-                requested,
-                requested,
+                "Logical viewport adjusted %d×%d → %d×%d to fit display %d×%d",
+                theme.SIZE,
+                theme.SIZE,
                 fit_side,
                 fit_side,
+                display_width,
+                display_height,
             )
             theme.set_framebuffer_side(fit_side)
             map_bg.invalidate()
-            if self._display.get_size() != (fit_side, fit_side):
-                pygame.display.quit()
-                self._display = video.init_display(fit_side, fit_side, fullscreen)
+        logger.info(
+            "Physical display %d×%d; centered logical viewport %d×%d",
+            display_width,
+            display_height,
+            theme.SIZE,
+            theme.SIZE,
+        )
         self.surface = pygame.Surface((theme.SIZE, theme.SIZE))
         pygame.mouse.set_visible(False)
         pygame.event.set_allowed(

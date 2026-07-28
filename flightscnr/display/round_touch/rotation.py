@@ -72,8 +72,47 @@ def rotation_degrees() -> int:
     return normalize_degrees(DISPLAY_ROTATION)
 
 
-def to_logical(x: float, y: float) -> tuple[int, int]:
-    """Map a physical screen/touch coordinate into the draw buffer."""
+def _physical_display_size() -> tuple[int, int]:
+    surface = pygame.display.get_surface()
+    if surface is None:
+        return theme.SIZE, theme.SIZE
+    return surface.get_size()
+
+
+def viewport_offset(
+    display_size: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Top-left offset of the centered square UI in the physical display."""
+    width, height = display_size or _physical_display_size()
+    return (
+        (int(width) - theme.SIZE) // 2,
+        (int(height) - theme.SIZE) // 2,
+    )
+
+
+def in_viewport(
+    x: float,
+    y: float,
+    display_size: tuple[int, int] | None = None,
+) -> bool:
+    """Return True when a physical coordinate is inside the square UI."""
+    offset_x, offset_y = viewport_offset(display_size)
+    return (
+        offset_x <= x < offset_x + theme.SIZE
+        and offset_y <= y < offset_y + theme.SIZE
+    )
+
+
+def to_logical(
+    x: float,
+    y: float,
+    display_size: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Map a physical display/touch coordinate into the square draw buffer."""
+    offset_x, offset_y = viewport_offset(display_size)
+    x -= offset_x
+    y -= offset_y
+
     side = theme.SIZE
     rotation = rotation_degrees()
     if rotation == 0:

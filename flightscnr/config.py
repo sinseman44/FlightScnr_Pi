@@ -288,22 +288,20 @@ VESSEL_PARKED_SOG_KT = float(os.environ.get("VESSEL_PARKED_SOG_KT", "0.5"))
 
 
 def square_framebuffer_side() -> int:
-    """Square draw-buffer size for the round touch UI (refined after display init)."""
-    if DISPLAY_WIDTH == DISPLAY_HEIGHT:
-        return DISPLAY_WIDTH
-    # Legacy rectangular env — guess from config; app.py clamps to the real display.
-    if DISPLAY_ROTATION in (90, 270):
-        side = max(DISPLAY_WIDTH, DISPLAY_HEIGHT)
-    else:
-        side = min(DISPLAY_WIDTH, DISPLAY_HEIGHT)
-    logger.warning(
-        "DISPLAY_WIDTH (%d) != DISPLAY_HEIGHT (%d). Set both to your panel resolution "
-        "(e.g. 720×720) in /etc/flightscnr.env. Provisional framebuffer: %d×%d.",
-        DISPLAY_WIDTH,
-        DISPLAY_HEIGHT,
-        side,
-        side,
-    )
+    """Square logical viewport fitted inside the physical display.
+
+    The FlightScnr UI remains square, while the SDL window may be rectangular.
+    A 480×320 panel therefore uses a centered 320×320 logical viewport.
+    """
+    side = min(DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    if DISPLAY_WIDTH != DISPLAY_HEIGHT:
+        logger.info(
+            "Rectangular display %d×%d: using centered %d×%d logical viewport.",
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT,
+            side,
+            side,
+        )
     return side
 BUTTONS_DIR = os.environ.get("BUTTONS_DIR", "").strip()
 SDL_VIDEODRIVER = os.environ.get("SDL_VIDEODRIVER", "")

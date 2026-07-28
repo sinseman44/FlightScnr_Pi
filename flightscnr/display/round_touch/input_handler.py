@@ -100,6 +100,12 @@ def _logical_pos(pos) -> tuple[int, int]:
     return rotation.to_logical(pos[0], pos[1])
 
 
+def _in_viewport(pos) -> bool:
+    from display.round_touch import rotation
+
+    return rotation.in_viewport(pos[0], pos[1])
+
+
 class TouchInput:
     """One-finger tap and swipe detection for resistive/capacitive touch panels."""
 
@@ -253,10 +259,17 @@ class TouchInput:
                 else:
                     return
             self._clear_pending()
-            width = pygame.display.get_surface().get_width()
-            height = pygame.display.get_surface().get_height()
+            surface = pygame.display.get_surface()
+            if surface is None:
+                self.cancel_gesture()
+                return
+            width, height = surface.get_size()
+            physical_pos = (event.x * width, event.y * height)
+            if not _in_viewport(physical_pos):
+                self.cancel_gesture()
+                return
             self._active_fid = fid
-            self._start = _logical_pos((event.x * width, event.y * height))
+            self._start = _logical_pos(physical_pos)
             self._drag_end = self._start
             self._last_motion = self._start
             self._max_dist = 0.0
@@ -283,6 +296,9 @@ class TouchInput:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             _note_mouse_fallback()
             self._clear_pending()
+            if not _in_viewport(event.pos):
+                self.cancel_gesture()
+                return
             self._start = _logical_pos(event.pos)
             self._drag_end = self._start
             self._last_motion = self._start

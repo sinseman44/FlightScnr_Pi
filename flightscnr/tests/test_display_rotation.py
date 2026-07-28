@@ -39,6 +39,28 @@ class TestDisplayRotation(unittest.TestCase):
                 with mock.patch.object(rotation, "rotation_degrees", return_value=deg):
                     self.assertEqual(rotation.to_logical(*phys), expected)
 
+    def test_rectangular_viewport_offset_and_mapping(self):
+        from display.round_touch import rotation, theme
+
+        display_size = (480, 320)
+        with mock.patch.object(theme, "SIZE", 320):
+            self.assertEqual(rotation.viewport_offset(display_size), (80, 0))
+            self.assertTrue(rotation.in_viewport(80, 0, display_size))
+            self.assertTrue(rotation.in_viewport(399, 319, display_size))
+            self.assertFalse(rotation.in_viewport(79, 160, display_size))
+            self.assertFalse(rotation.in_viewport(400, 160, display_size))
+
+            with mock.patch.object(rotation, "rotation_degrees", return_value=0):
+                self.assertEqual(
+                    rotation.to_logical(90, 20, display_size),
+                    (10, 20),
+                )
+            with mock.patch.object(rotation, "rotation_degrees", return_value=90):
+                self.assertEqual(
+                    rotation.to_logical(90, 20, display_size),
+                    (20, 309),
+                )
+
     def test_cycle_display_rotation(self):
         from display.round_touch import settings
 
