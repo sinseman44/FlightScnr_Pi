@@ -104,6 +104,6 @@ fi
 cat <<MSG
 Cage service installed.
   Service: sudo systemctl status flightscnr.service
-  Logs:    sudo journalctl -u flightscnr.service -f
+  Logs:    sudo journalctl -t flightscnr -f
   Config:  sudoedit /etc/flightscnr.env
 MSG

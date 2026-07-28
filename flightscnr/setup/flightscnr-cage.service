@@ -19,6 +19,10 @@ Environment=SDL_VIDEODRIVER=wayland
 Environment=LIBSEAT_BACKEND=logind
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XKB_DEFAULT_LAYOUT=fr
+Environment=PYTHONUNBUFFERED=1
+
+SyslogIdentifier=flightscnr
+
 WorkingDirectory=__REPO_DIR__/flightscnr
 
 UtmpIdentifier=tty7
@@ -31,7 +35,7 @@ StandardInput=tty-fail
 StandardOutput=journal
 StandardError=journal
 
-ExecStart=/usr/bin/dbus-run-session -- /usr/bin/cage -s -- __REPO_DIR__/flightscnr-venv/bin/python3 __REPO_DIR__/flightscnr/flightscnr.py
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/cage -s -- __REPO_DIR__/flightscnr-venv/bin/python3 -u __REPO_DIR__/flightscnr/flightscnr.py
 ExecStartPost=+/usr/bin/chvt 7
 
 Restart=always
