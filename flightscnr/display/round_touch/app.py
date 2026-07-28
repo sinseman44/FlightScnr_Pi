@@ -520,7 +520,23 @@ class RoundTouchDisplay:
             self.flight_index = 0
             self._selected_flight_id = self._flight_identity(ordered[0])
 
+    def _radar_display_background(self) -> pygame.Surface | None:
+        """Extended basemap for rectangular displays, only on the live radar."""
+        if (
+            self.screen != SCREEN_RADAR
+            or self._fatal_error
+            or time.time() < self._boot_until
+            or self._calibrating_facing
+            or self._panning_map
+        ):
+            return None
+        return map_bg.get_display_background(
+            self._display.get_size(),
+            display_rotation=rotation.rotation_degrees(),
+        )
+
     def _present(self):
+        radar_background = self._radar_display_background()
         # Fast radar path: reuse a cached rotated static layer and only redraw
         # the sweep wedge in display space (skips a full-frame rotate/tick).
         if (
@@ -540,6 +556,7 @@ class RoundTouchDisplay:
                         layer_gen,
                         radar.current_sweep_angle(),
                         theme.SWEEP,
+                        background=radar_background,
                     )
                     self._stage("4_present", time.perf_counter() - _t)
                 else:
@@ -549,18 +566,33 @@ class RoundTouchDisplay:
                         layer_gen,
                         radar.current_sweep_angle(),
                         theme.SWEEP,
+                        background=radar_background,
                     )
                 return
 
         if FRAME_DEBUG:
             _t = time.perf_counter()
-            rotation.present(self._display, self.surface)
+            if radar_background is not None:
+                rotation.present_radar(
+                    self._display,
+                    self.surface,
+                    radar_background,
+                )
+            else:
+                rotation.present(self._display, self.surface)
             self._stage("4a_rotate", time.perf_counter() - _t)
             _t = time.perf_counter()
             pygame.display.flip()
             self._stage("4b_flip", time.perf_counter() - _t)
             return
-        rotation.present(self._display, self.surface)
+        if radar_background is not None:
+            rotation.present_radar(
+                self._display,
+                self.surface,
+                radar_background,
+            )
+        else:
+            rotation.present(self._display, self.surface)
         pygame.display.flip()
 
     def _draw(self):

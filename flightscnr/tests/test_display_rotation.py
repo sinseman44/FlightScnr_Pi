@@ -61,6 +61,46 @@ class TestDisplayRotation(unittest.TestCase):
                     (20, 309),
                 )
 
+    def test_present_radar_keeps_extended_map_outside_dial(self):
+        import pygame
+
+        from display.round_touch import rotation, theme
+
+        display = pygame.Surface((160, 100))
+        background = pygame.Surface((160, 100))
+        background.fill((20, 40, 80))
+        frame = pygame.Surface((100, 100))
+        frame.fill((200, 30, 20))
+
+        rotation._round_mask_cache.clear()
+        with (
+            mock.patch.object(theme, "SIZE", 100),
+            mock.patch.object(theme, "VISIBLE_RADIUS", 48),
+            mock.patch.object(rotation, "rotation_degrees", return_value=0),
+        ):
+            rotation.present_radar(display, frame, background)
+
+        self.assertEqual(display.get_at((0, 50))[:3], (20, 40, 80))
+        self.assertEqual(display.get_at((30, 0))[:3], (20, 40, 80))
+        self.assertEqual(display.get_at((80, 50))[:3], (200, 30, 20))
+
+    def test_rectangular_map_canvas_covers_any_rotation(self):
+        import math
+
+        from display.round_touch import map_bg, theme
+
+        with (
+            mock.patch.object(theme, "SIZE", 320),
+            mock.patch.object(theme, "VISIBLE_RADIUS", 158),
+        ):
+            side = map_bg._background_canvas_side((480, 320))
+            self.assertGreaterEqual(side, math.ceil(math.hypot(480, 320)) + 8)
+            self.assertEqual(side % 2, 0)
+            self.assertEqual(
+                map_bg._background_canvas_side((320, 320)),
+                158 * 2 + map_bg.TILE_SIZE,
+            )
+
     def test_cycle_display_rotation(self):
         from display.round_touch import settings
 

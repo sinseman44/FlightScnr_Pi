@@ -67,7 +67,7 @@ CARTO_TILE_WORKERS = 4
 OSM_TILE_WORKERS = 2
 VFR_TILE_WORKERS = 4
 CACHE_TTL_S = 7 * 24 * 3600
-CACHE_STYLE_VERSION = 18  # bump when map tint/placement/styles change
+CACHE_STYLE_VERSION = 19  # v19 stores an unmasked, rectangular-display-ready map
 
 
 _lock = threading.Lock()
@@ -77,6 +77,7 @@ _surfaces: dict[tuple, pygame.Surface] = {}
 # invalidated the radar backdrop cache (~every frame).
 _display_converted: set[tuple] = set()
 _fetch_threads: dict[tuple, threading.Thread] = {}
+_display_backgrounds: dict[tuple, pygame.Surface] = {}
 
 
 def normalize_map_style(raw: str | None) -> str:
@@ -97,6 +98,55 @@ def normalize_map_style(raw: str | None) -> str:
 def _enabled() -> bool:
     raw = os.environ.get("RADAR_MAP_ENABLED", "true").strip().lower()
     return raw in ("1", "true", "yes", "on")
+
+
+def _fill_display_enabled() -> bool:
+    """Whether rectangular displays extend the basemap outside the radar dial."""
+    raw = os.environ.get("RADAR_MAP_FILL_DISPLAY", "true").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _outside_dim_alpha() -> int:
+    """Black overlay alpha applied to the map outside the central radar dial."""
+    raw = os.environ.get("RADAR_MAP_OUTSIDE_DIM_ALPHA", "55")
+    try:
+        return max(0, min(255, int(raw)))
+    except (TypeError, ValueError):
+        return 55
+
+
+def _physical_display_size() -> tuple[int, int]:
+    """Return the active SDL size, falling back to configured dimensions."""
+    display = pygame.display.get_surface()
+    if display is not None:
+        return display.get_size()
+    try:
+        from config import DISPLAY_HEIGHT, DISPLAY_WIDTH
+
+        return int(DISPLAY_WIDTH), int(DISPLAY_HEIGHT)
+    except (ImportError, TypeError, ValueError):
+        try:
+            width = int(os.environ.get("DISPLAY_WIDTH", str(theme.SIZE)))
+            height = int(os.environ.get("DISPLAY_HEIGHT", str(theme.SIZE)))
+            return width, height
+        except (TypeError, ValueError):
+            return theme.SIZE, theme.SIZE
+
+
+def _background_canvas_side(
+    display_size: tuple[int, int] | None = None,
+) -> int:
+    """Square source-map side large enough for a rotated rectangular crop."""
+    base_side = theme.VISIBLE_RADIUS * 2 + TILE_SIZE
+    width, height = display_size or _physical_display_size()
+    width = max(1, int(width))
+    height = max(1, int(height))
+    if (width, height) == (theme.SIZE, theme.SIZE):
+        return base_side
+    required = int(math.ceil(math.hypot(width, height))) + 8
+    side = max(base_side, required)
+    # Keep an even side so the home point lands exactly on an integer centre.
+    return side + (side % 2)
 
 
 def _env_map_style() -> str:
@@ -157,12 +207,16 @@ def _cache_key_for_scale(scale_index: int) -> tuple | None:
         round(LOCATION_HOME[1], 5),
         scale_index,
         _resolved_style(),
+        _background_canvas_side(),
     )
 
 
 def _cache_path_for_key(key: tuple) -> str:
-    lat, lon, scale_idx, style = key[0], key[1], key[2], key[3]
-    return os.path.join(CACHE_DIR, f"bg_{style}_{lat}_{lon}_{scale_idx}.png")
+    lat, lon, scale_idx, style, canvas_side = key[:5]
+    return os.path.join(
+        CACHE_DIR,
+        f"bg_{style}_{lat}_{lon}_{scale_idx}_{canvas_side}px.png",
+    )
 
 
 def _manifest_path_for_key(key: tuple) -> str:
@@ -392,7 +446,7 @@ _vfr_opacity_blit_cache: tuple | None = None  # (id(bg), pct, surface)
 
 
 def _vfr_with_draw_opacity(bg: pygame.Surface) -> pygame.Surface:
-    """Fade VFR chart toward parchment by settings opacity (preserves circle alpha).
+    """Fade VFR chart toward parchment by settings opacity (preserves alpha).
 
     Applied at draw time so changing the slider never clears/rebuilds the tile cache
     (which previously left the dark radar BG showing — looked like a black map).
@@ -415,7 +469,7 @@ def _vfr_with_draw_opacity(bg: pygame.Surface) -> pygame.Surface:
     t = pct / 100.0
     inv = 1.0 - t
     out = bg.copy()
-    # Blend RGB toward parchment; leave the circle mask alpha untouched.
+    # Blend RGB toward parchment; leave alpha untouched.
     rgb = pygame.surfarray.pixels3d(out)
     rgb[:, :, 0] = (rgb[:, :, 0].astype("float32") * t + 242.0 * inv).astype("uint8")
     rgb[:, :, 1] = (rgb[:, :, 1].astype("float32") * t + 244.0 * inv).astype("uint8")
@@ -477,19 +531,11 @@ def _style_for_radar(surface: pygame.Surface, style: str | None = None) -> pygam
     return _style_osm(surface)
 
 
-def _apply_circle_mask(surface: pygame.Surface) -> pygame.Surface:
-    w, h = surface.get_size()
-    cx = cy = w // 2
-    radius = min(cx, cy)
-    masked = pygame.Surface((w, h), pygame.SRCALPHA)
-    masked.blit(_as_display_surface(surface), (0, 0))
-    mask = pygame.Surface((w, h), pygame.SRCALPHA)
-    pygame.draw.circle(mask, (255, 255, 255, 255), (cx, cy), radius)
-    masked.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-    return masked
-
-
-def _build_background(scale_index: int, style: str | None = None) -> pygame.Surface | None:
+def _build_background(
+    scale_index: int,
+    style: str | None = None,
+    canvas_side: int | None = None,
+) -> pygame.Surface | None:
     try:
         from config import LOCATION_HOME, location_configured
     except ImportError:
@@ -508,7 +554,15 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
     zoom = _zoom_for_scale(home_lat, px_per_km, provider)
     render_scale = _basemap_render_scale(home_lat, scale_index, zoom, provider)
 
-    span_km = theme.VISIBLE_RADIUS / px_per_km
+    diameter = max(
+        theme.VISIBLE_RADIUS * 2 + TILE_SIZE,
+        int(canvas_side or _background_canvas_side()),
+    )
+    if diameter % 2:
+        diameter += 1
+    # Fetch enough imagery to cover the full source square. This lets the same
+    # north-up map feed both the circular radar and a rotated 480×320 backdrop.
+    span_km = (diameter / 2.0) / px_per_km
     lat_delta = span_km / 110.574
     cos_lat = max(0.01, math.cos(math.radians(home_lat)))
     lon_delta = span_km / (111.320 * cos_lat)
@@ -518,7 +572,6 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
     y_min = _lat_to_tile_y(home_lat + lat_delta, zoom) - 1
     y_max = _lat_to_tile_y(home_lat - lat_delta, zoom) + 1
 
-    diameter = theme.VISIBLE_RADIUS * 2 + TILE_SIZE
     center = diameter // 2
     home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
 
@@ -550,17 +603,18 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
 
     logger.info(
         "Built radar map background (%s, scale %d, %d tiles, zoom %d, "
-        "~%.1f km span, render_scale %.2f)",
+        "~%.1f km half-span, %dpx canvas, render_scale %.2f)",
         provider,
         scale_index,
         len(coords),
         zoom,
         span_km,
+        diameter,
         render_scale,
     )
-    canvas = _style_for_radar(canvas, provider)
-    canvas = _apply_circle_mask(canvas)
-    return canvas
+    # Keep the cached source unmasked. The round bezel is applied by the radar
+    # layer, while rectangular displays can crop this same map to their full size.
+    return _style_for_radar(canvas, provider)
 
 
 def _save_cache(surface: pygame.Surface, key: tuple):
@@ -576,6 +630,7 @@ def _save_cache(surface: pygame.Surface, key: tuple):
         "map_style": key[3],
         "fetched_at": int(time.time()),
         "style_version": CACHE_STYLE_VERSION,
+        "canvas_side": key[4],
         "path": os.path.basename(path),
     }
     tmp = manifest_path + ".tmp"
@@ -600,6 +655,8 @@ def _load_cache(key: tuple) -> pygame.Surface | None:
             if manifest.get("scale_index") != key[2]:
                 return None
             if manifest.get("provider") != key[3]:
+                return None
+            if manifest.get("canvas_side") != key[4]:
                 return None
             if manifest.get("style_version") != CACHE_STYLE_VERSION:
                 return None
@@ -636,6 +693,7 @@ def _remember_surface(key: tuple, surface: pygame.Surface):
     with _lock:
         _surfaces[key] = surface
         _display_converted.discard(key)
+        _display_backgrounds.clear()
 
 
 def _fetch_running(key: tuple) -> bool:
@@ -661,8 +719,8 @@ def _start_fetch(key: tuple):
 
 def _fetch_worker(key: tuple):
     try:
-        # key = (lat, lon, scale_index, style) — use key style, not live settings.
-        surface = _build_background(key[2], style=key[3])
+        # Pin style and canvas size from the key; never re-read live settings.
+        surface = _build_background(key[2], style=key[3], canvas_side=key[4])
         if surface is None:
             return
         _save_cache(surface, key)
@@ -736,9 +794,11 @@ def prewarm_all_scales():
 
 
 def clear_vfr_opacity_blit_cache():
-    """Drop draw-time VFR opacity surface (call when the slider changes)."""
+    """Drop draw-time VFR opacity and derived full-display surfaces."""
     global _vfr_opacity_blit_cache
     _vfr_opacity_blit_cache = None
+    with _lock:
+        _display_backgrounds.clear()
 
 
 def invalidate():
@@ -747,6 +807,7 @@ def invalidate():
         _surfaces.clear()
         _fetch_threads.clear()
         _display_converted.clear()
+        _display_backgrounds.clear()
     clear_vfr_opacity_blit_cache()
 
 
@@ -780,6 +841,73 @@ def get_background() -> pygame.Surface | None:
                 surface = converted
             _display_converted.add(key)
         return surface
+
+
+def get_display_background(
+    display_size: tuple[int, int],
+    *,
+    display_rotation: int = 0,
+) -> pygame.Surface | None:
+    """Return a same-scale basemap filling a rectangular physical display.
+
+    The cached map remains north-up. We rotate it by the radar facing minus the
+    final UI rotation, crop it around the home point, and darken it slightly so
+    the circular radar overlay stays visually dominant. Square displays retain
+    the original round-only presentation.
+    """
+    if not _enabled() or not _fill_display_enabled():
+        return None
+    width, height = int(display_size[0]), int(display_size[1])
+    if width <= 0 or height <= 0:
+        return None
+    if (width, height) == (theme.SIZE, theme.SIZE):
+        return None
+
+    bg = get_background()
+    if bg is None:
+        return None
+    if _resolved_style() == "vfr":
+        bg = _vfr_with_draw_opacity(bg)
+
+    try:
+        from display.round_touch import settings
+
+        facing = float(settings.effective_facing_deg() or 0.0)
+    except Exception:
+        facing = 0.0
+    angle = (facing - float(display_rotation or 0)) % 360.0
+    if angle > 180.0:
+        angle -= 360.0
+    dim_alpha = _outside_dim_alpha()
+    key = (
+        cache_token(),
+        id(bg),
+        (width, height),
+        round(angle, 2),
+        dim_alpha,
+        theme.BG,
+    )
+    with _lock:
+        cached = _display_backgrounds.get(key)
+    if cached is not None:
+        return cached
+
+    source = bg if abs(angle) < 0.05 else pygame.transform.rotate(bg, angle)
+    result = pygame.Surface((width, height))
+    result.fill(theme.BG)
+    result.blit(source, source.get_rect(center=(width // 2, height // 2)))
+    if dim_alpha:
+        shade = pygame.Surface((width, height), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, dim_alpha))
+        result.blit(shade, (0, 0))
+    result = _as_display_surface(result)
+
+    with _lock:
+        # Facing changes during calibration; cap stale derived surfaces.
+        if len(_display_backgrounds) >= 12:
+            _display_backgrounds.clear()
+        _display_backgrounds[key] = result
+    return result
 
 
 def draw_background(surface: pygame.Surface, pan_offset: tuple[int, int] | None = None):

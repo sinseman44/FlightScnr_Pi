@@ -18,6 +18,9 @@ _next_base_key = None
 # A full-frame present() ran (modal, other screen); the next fast radar frame
 # must repaint the whole display rather than trust dirty-rect state.
 _needs_full = False
+# Full-display basemap currently underneath the fast radar layer.
+_radar_background_key = None
+_round_mask_cache: dict[tuple, pygame.Surface] = {}
 
 
 def prewarm_base(base_layer: pygame.Surface, layer_gen: int) -> None:
@@ -37,9 +40,10 @@ def prewarm_base(base_layer: pygame.Surface, layer_gen: int) -> None:
     _t = time.perf_counter()
     if rotation == 0:
         # Already a private snapshot from the radar rebuild path.
-        _next_base = base_layer
+        rotated = base_layer
     else:
-        _next_base = pygame.transform.rotate(base_layer, -rotation)
+        rotated = pygame.transform.rotate(base_layer, -rotation)
+    _next_base = _round_overlay(rotated)
     _next_base_key = key
     if frame_debug.ENABLED:
         frame_debug.stage("0_prewarm_rotate", time.perf_counter() - _t)
@@ -124,13 +128,85 @@ def to_logical(
     return int(side - 1 - y), int(x)
 
 
+def _round_alpha_mask(size: tuple[int, int]) -> pygame.Surface:
+    """Reusable alpha mask that keeps only the visible radar circle."""
+    key = (tuple(size), int(theme.VISIBLE_RADIUS))
+    mask = _round_mask_cache.get(key)
+    if mask is None:
+        width, height = int(size[0]), int(size[1])
+        mask = pygame.Surface((width, height), pygame.SRCALPHA)
+        mask.fill((0, 0, 0, 0))
+        pygame.draw.circle(
+            mask,
+            (255, 255, 255, 255),
+            (width // 2, height // 2),
+            int(theme.VISIBLE_RADIUS),
+        )
+        _round_mask_cache[key] = mask
+    return mask
+
+
+def _round_overlay(surface: pygame.Surface) -> pygame.Surface:
+    """Copy a square radar frame and make pixels outside its dial transparent."""
+    overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    overlay.blit(surface, (0, 0))
+    overlay.blit(
+        _round_alpha_mask(surface.get_size()),
+        (0, 0),
+        special_flags=pygame.BLEND_RGBA_MULT,
+    )
+    return overlay
+
+
+def _paint_radar_background(
+    display: pygame.Surface,
+    background: pygame.Surface | None,
+) -> None:
+    if background is None:
+        display.fill((0, 0, 0))
+        return
+    if background.get_size() == display.get_size():
+        display.blit(background, (0, 0))
+        return
+    display.fill((0, 0, 0))
+    display.blit(background, _center_offset(display, background))
+
+
+def _background_key(background: pygame.Surface | None) -> tuple | None:
+    if background is None:
+        return None
+    return (id(background), background.get_size())
+
+
+def present_radar(
+    display: pygame.Surface,
+    frame: pygame.Surface,
+    background: pygame.Surface | None,
+) -> None:
+    """Present a round radar over an optional physical-display basemap."""
+    global _prev_sweep_rect, _pending_key, _needs_full, _radar_background_key
+    if background is None:
+        present(display, frame)
+        return
+    _prev_sweep_rect = None
+    _pending_key = None
+    _needs_full = True
+    _radar_background_key = _background_key(background)
+    _paint_radar_background(display, background)
+    rotation = rotation_degrees()
+    rotated = frame if rotation == 0 else pygame.transform.rotate(frame, -rotation)
+    overlay = _round_overlay(rotated)
+    display.blit(overlay, _center_offset(display, overlay))
+
+
 def present(display: pygame.Surface, frame: pygame.Surface) -> None:
     """Blit the logical frame onto the physical display, applying rotation."""
-    global _prev_sweep_rect, _pending_key, _needs_full
+    global _prev_sweep_rect, _pending_key, _needs_full, _radar_background_key
     # Full-frame present invalidates the dirty-sweep erase rect.
     _prev_sweep_rect = None
     _pending_key = None
     _needs_full = True
+    _radar_background_key = None
     rotation = rotation_degrees()
     if rotation == 0:
         if display.get_size() == frame.get_size():
@@ -154,24 +230,28 @@ def present_radar_sweep(
     layer_gen: int,
     sweep_angle_logical: float,
     sweep_color,
+    *,
+    background: pygame.Surface | None = None,
 ) -> None:
     """Blit a cached rotated radar base, then draw the sweep in display space.
 
-    Avoids re-rotating the full 720×720 frame every sweep tick (was ~4.5ms on
+    Avoids re-rotating the full square frame every sweep tick (was ~4.5ms on
     Pi with DISPLAY_ROTATION=90). The static layer is rotated only when it
     rebuilds (~10Hz); each frame restores the previous sweep AABB from the
     cached base and paints a new wedge. Uses display.update(dirty) so X11
     doesn't re-push the whole framebuffer.
     """
     global _rot_base, _rot_base_key, _prev_sweep_rect, _pending_key, _needs_full
-    global _next_base, _next_base_key
+    global _next_base, _next_base_key, _radar_background_key
     from display.round_touch import draw
 
     rotation = rotation_degrees()
     # Match prewarm_base — generation identifies the layer contents.
     key = (layer_gen, rotation, theme.SIZE)
-    origin_off = (0, 0)
+    origin_off = _center_offset(display, base_layer)
     full_refresh = False
+    background_key = _background_key(background)
+    background_changed = background_key != _radar_background_key
 
     stale = _rot_base is None or _rot_base_key != key
     swap_in = False
@@ -198,9 +278,10 @@ def present_radar_sweep(
             if rotation == 0:
                 # Copy so the async layer rebuild can't scribble on the surface
                 # we erase sweep rects from (see prewarm_frame_layer).
-                _rot_base = base_layer.copy()
+                rotated = base_layer.copy()
             else:
-                _rot_base = pygame.transform.rotate(base_layer, -rotation)
+                rotated = pygame.transform.rotate(base_layer, -rotation)
+            _rot_base = _round_overlay(rotated)
         except pygame.error as exc:
             # Published layer briefly locked by a concurrent rebuild/snapshot.
             if "locked" in str(exc).lower():
@@ -216,19 +297,15 @@ def present_radar_sweep(
             if frame_debug.ENABLED:
                 frame_debug.stage("4r_rotate", time.perf_counter() - _t)
 
-    if swap_in:
-        if display.get_size() != _rot_base.get_size():
-            display.fill((0, 0, 0))
-            origin_off = _center_offset(display, _rot_base)
-            display.blit(_rot_base, origin_off)
-        else:
-            display.blit(_rot_base, (0, 0))
+    origin_off = _center_offset(display, _rot_base)
+    if swap_in or _needs_full or background_changed:
+        _paint_radar_background(display, background)
+        display.blit(_rot_base, origin_off)
         _prev_sweep_rect = None
         full_refresh = True
         _needs_full = False
+        _radar_background_key = background_key
     else:
-        if display.get_size() != _rot_base.get_size():
-            origin_off = _center_offset(display, _rot_base)
         # Erase the previous wedge by restoring that rect from the static base.
         if _prev_sweep_rect is not None:
             r = _prev_sweep_rect
